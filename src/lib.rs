@@ -1,8 +1,16 @@
 use boa_engine::{Context, Source};
+use litrs::StringLit;
+use proc_macro2::*;
+use quote::quote;
 use std::cell::RefCell;
 
 const PRISM_JS: &str = include_str!("../prism/prism.js");
-pub const PRISM_CSS: &str = include_str!("../prism/prism.css");
+const PRISM_CSS: &str = include_str!("../prism/prism.css");
+
+#[proc_macro]
+pub fn prism_css(_token_stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    proc_macro::TokenStream::from(quote! { #PRISM_CSS })
+}
 
 thread_local! {
     static CONTEXT: RefCell<Context<'static>> = {
@@ -26,7 +34,7 @@ fn with_context<T>(f: impl FnOnce(&mut Context<'_>) -> T) -> T {
 /// `grammar`: the name of the prism.js language definition in the context
 ///
 /// `language`: the name of the language definition passed to grammar
-pub fn highlight(text: &str, grammar: &str, language: &str) -> String {
+fn highlight(text: &str, grammar: &str, language: &str) -> String {
     with_context(|context| {
         context
             .global_object()
@@ -45,6 +53,48 @@ pub fn highlight(text: &str, grammar: &str, language: &str) -> String {
             .expect("highlight execution results return an error")
             .to_std_string_escaped()
     })
+}
+
+#[proc_macro]
+pub fn highlight_str(token_stream: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let token_stream = TokenStream::from(token_stream).into_iter();
+    let expanded =
+        highlight_str_(token_stream).unwrap_or_else(|err| quote! { compile_error!(#err) });
+    proc_macro::TokenStream::from(expanded)
+}
+
+fn highlight_str_(
+    mut token_stream: impl Iterator<Item = TokenTree>,
+) -> Result<TokenStream, String> {
+    let first = token_stream.next();
+    let Some(TokenTree::Literal(code)) = first else {
+        return Err("Expected only a string literal".to_string());
+    };
+    let code =
+        StringLit::try_from(code).map_err(|err| format!("Expected a string literal: {}", err))?;
+
+    let second = token_stream.next();
+    let Some(TokenTree::Punct(punct)) = second else {
+        return Err("You must put a comma `,` after the code string".to_string());
+    };
+
+    if punct.as_char() != ',' {
+        return Err("You must put a comma `,` after the code string".to_string());
+    }
+
+    let third = token_stream.next();
+    let Some(TokenTree::Literal(lang)) = third else {
+        return Err("Expected only a string literal".to_string());
+    };
+    let lang =
+        StringLit::try_from(lang).map_err(|err| format!("Expected a string literal: {}", err))?;
+
+    let html = highlight(
+        code.value(),
+        &format!("Prism.languages.{}", lang.value()),
+        lang.value(),
+    );
+    Ok(quote!(#html))
 }
 
 #[test]
