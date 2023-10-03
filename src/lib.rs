@@ -1,4 +1,7 @@
+mod indoc;
+
 use boa_engine::{Context, Source};
+use indoc::lit_indoc;
 use litrs::StringLit;
 use proc_macro2::*;
 use quote::quote;
@@ -90,7 +93,7 @@ fn highlight_str_(
         StringLit::try_from(lang).map_err(|err| format!("Expected a string literal: {}", err))?;
 
     let html = highlight(
-        code.value(),
+        &lit_indoc(code.value()),
         &format!("Prism.languages.{}", lang.value()),
         lang.value(),
     );

@@ -1,0 +1,1 @@
+from https://github.com/dtolnay/indoc
