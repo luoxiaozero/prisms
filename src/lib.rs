@@ -16,19 +16,25 @@ pub fn prism_css(_token_stream: proc_macro::TokenStream) -> proc_macro::TokenStr
 }
 
 thread_local! {
-    static CONTEXT: RefCell<Context<'static>> = {
+    static CONTEXT: Result<RefCell<Context<'static>>, String> = {
         let mut context = Context::default();
-        context
+        if let Err(err) = context
             .eval(Source::from_bytes(PRISM_JS))
-            .expect("Error initializing PRISM_JS");
-        RefCell::new(context)
+            .map_err(|_| "Error initializing PRISM_JS".to_string()) {
+                return Err(err);
+            }
+
+        Ok(RefCell::new(context))
     };
 }
 
-fn with_context<T>(f: impl FnOnce(&mut Context<'_>) -> T) -> T {
-    CONTEXT.with(|context| {
-        let mut context = context.borrow_mut();
-        f(&mut *context)
+fn with_context<T>(f: impl FnOnce(&mut Context<'_>) -> T) -> Result<T, String> {
+    CONTEXT.with(|context| match context {
+        Ok(context) => {
+            let mut context = context.borrow_mut();
+            Ok(f(&mut *context))
+        }
+        Err(err) => Err(err.clone()),
     })
 }
 
@@ -37,25 +43,28 @@ fn with_context<T>(f: impl FnOnce(&mut Context<'_>) -> T) -> T {
 /// `grammar`: the name of the prism.js language definition in the context
 ///
 /// `language`: the name of the language definition passed to grammar
-fn highlight(text: &str, grammar: &str, language: &str) -> String {
+fn highlight(text: &str, grammar: &str, language: &str) -> Result<String, String> {
     with_context(|context| {
         context
             .global_object()
             .set("text", text, true, context)
-            .unwrap();
+            .map_err(|_| "Set text error".to_string())?;
         context
             .global_object()
             .set("language", language, true, context)
-            .unwrap();
+            .map_err(|_| "Set language error".to_string())?;
 
         let src: String = format!("Prism.highlight(text, {grammar}, language)");
         let src = Source::from_bytes(&src);
-        let html = context.eval(src).expect("highlight execution failed");
+        let html = context
+            .eval(src)
+            .map_err(|_| "highlight execution failed".to_string())?;
 
-        html.to_string(context)
-            .expect("highlight execution results return an error")
-            .to_std_string_escaped()
-    })
+        let html = html
+            .to_string(context)
+            .map_err(|_| "highlight execution results return an error".to_string())?;
+        Ok(html.to_std_string_escaped())
+    })?
 }
 
 #[proc_macro]
@@ -96,14 +105,14 @@ fn highlight_str_(
         &lit_indoc(code.value()),
         &format!("Prism.languages.{}", lang.value()),
         lang.value(),
-    );
+    )?;
     Ok(quote!(#html))
 }
 
 #[test]
 fn highlight_test() {
     let js_code = r#"let two = 1 + 1;"#;
-    let html = highlight(js_code, "Prism.languages.javascript", "javascript");
+    let html = highlight(js_code, "Prism.languages.javascript", "javascript").unwrap();
     assert_eq!(
         html,
         r#"<span class="token keyword">let</span> two <span class="token operator">=</span> <span class="token number">1</span> <span class="token operator">+</span> <span class="token number">1</span><span class="token punctuation">;</span>"#
